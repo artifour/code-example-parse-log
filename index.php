@@ -1,5 +1,10 @@
 <?php
 
+set_error_handler(function ($level, $message, $filename, $lineNum) {
+    throw new ErrorException($message, 0, $level, $filename, $lineNum);
+});
+
+const DEFAULT_LOG_FILENAME = 'access.log';
 const CRAWLER_USER_AGENT_PATTERNS = [
     'Google' => 'Googlebot',
     'Bing' => 'Bingbot',
@@ -27,7 +32,7 @@ class LogInfoDto
 function getAccessInfo(string $line): AccessInfoDto
 {
     if (preg_match('/"\S+ (\S+) \S+" (\d+) (\d+) "[^"]+" "([^"]+)"/', $line, $matches, 0, strpos($line, ']', 40) + 2) === false) {
-        exit("Line parse error: $line");
+        throw new ErrorException("Line parse error: '$line'");
     }
 
     $accessInfoDto = new AccessInfoDto();
@@ -50,20 +55,37 @@ function findCrawlerName(string $userAgent): ?string
     return null;
 }
 
+function isStatusCodeOk(int $statusCode): bool
+{
+    return ($statusCode >= 200) && ($statusCode < 300);
+}
+
 function parseAccessLog(string $filename): LogInfoDto
 {
-    $file = fopen($filename, 'r');
+    if (!file_exists($filename)) {
+        throw new ErrorException("File not found: '$filename'");
+    }
+
     $urls = [];
+
     $logInfoDto = new LogInfoDto();
     $logInfoDto->crawlers = array_fill_keys(array_keys(CRAWLER_USER_AGENT_PATTERNS), 0);
+
+    $file = fopen($filename, 'r');
     try {
         $line = fgets($file);
         while ($line) {
             $accessInfoDto = getAccessInfo($line);
+
             $urls[$accessInfoDto->requestPath] = null;
+
             $logInfoDto->views++;
-            $logInfoDto->traffic += $accessInfoDto->bytesSent;
             $logInfoDto->statusCodes[$accessInfoDto->statusCode] = ($logInfoDto->statusCodes[$accessInfoDto->statusCode] ?? 0) + 1;
+
+            if (isStatusCodeOk($accessInfoDto->statusCode)) {
+                $logInfoDto->traffic += $accessInfoDto->bytesSent;
+            }
+
             $crawlerName = findCrawlerName($accessInfoDto->userAgent);
             if ($crawlerName) {
                 $logInfoDto->crawlers[$crawlerName]++;
@@ -80,7 +102,7 @@ function parseAccessLog(string $filename): LogInfoDto
     return $logInfoDto;
 }
 
-$logInfoDto = parseAccessLog($argv[1] ?? 'access.log');
+$logInfoDto = parseAccessLog($argv[1] ?? DEFAULT_LOG_FILENAME);
 
 echo json_encode($logInfoDto, JSON_PRETTY_PRINT);
 
